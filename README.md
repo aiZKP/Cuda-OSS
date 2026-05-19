@@ -1,109 +1,186 @@
-# cuda-evolve
+# CCO — Cuda-Compute-OSS
 
-Autonomous GPU kernel optimization system driven by AI agents.
+<p align="center">
+  <img src="docs/assets/cco-readme-banner.png" alt="CCO Cuda-Compute-OSS banner" width="100%">
+</p>
 
-## Overview
+<p align="center">
+  <a href="https://discord.gg/kEHZ3wJuHM"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white" alt="Join the CCO Discord"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white" alt="Python 3.10+"></a>
+</p>
 
-cuda-evolve lets AI agents (Claude, Codex, etc.) autonomously profile, analyze, and optimize GPU kernels through iterative experimentation. Given a kernel, the agent:
+**Autonomous GPU kernel optimization driven by AI agents — verified on real datacenter hardware.**
 
-1. **Profiles** the kernel to understand performance characteristics (compute-bound vs memory-bound)
-2. **Proposes** an optimization hypothesis based on the CUDA optimization guide
-3. **Modifies** the kernel code
-4. **Benchmarks** the modified kernel against the reference implementation
-5. **Decides** whether to keep or revert the change
-6. **Logs** the result to `workspace/MEMORY.md` and `workspace/results.tsv`
-7. **Repeats** until satisfactory performance is achieved
+CCO is a framework that lets AI coding agents (Claude, Codex, Cursor, etc.) iteratively profile, optimize, and validate CUDA / Triton kernels through a disciplined experimental protocol. The agent does the optimizing; this repo provides the scaffolding — the benchmark harness, the profiling tooling, the experiment lineage, and the knowledge base that grows over time.
 
-## Project Structure
+---
 
-```
-cuda-evolve/
-├── program.md              # Agent workflow protocol
-├── CUDA_OPTIMIZATION.md    # Agent-maintained optimization knowledge base
-├── workspace/              # Runtime outputs and shared logs
-│   ├── MEMORY.md           # Global optimization log (shared across sessions)
-│   ├── results.tsv         # Experiment results tracking
-│   └── ncu_reports/        # NCU profiling reports
-├── tools/
-│   ├── bench.py            # Benchmark harness & correctness checking
-│   ├── history.py          # Experiment history utilities
-│   ├── merge_results.py    # Merge benchmark / result files
-│   ├── ncu_profile.py      # Nsight Compute profiling
-│   ├── prepare.py          # Environment preparation & validation
-│   ├── profile.py          # Kernel profiling (roofline analysis)
-│   ├── retrieve_docs.py    # Documentation retrieval helpers
-│   ├── run_loop.py         # Agent / optimization loop driver
-│   ├── summarize.py        # Result summarization
-│   └── supervisor.py       # Process supervision
-├── kernel.py               # The kernel being optimized (editable by agent)
-├── references/             # Reference implementations (per-kernel modules)
-├── kernels/                # Baseline kernels (READ-ONLY, bring your own)
-├── kernels_optimized/      # Agent-optimized kernels (output)
-├── memory/                 # Per-kernel experiment logs
-└── pyproject.toml
-```
+## Why This Exists
+
+Hand-tuning GPU kernels is slow, expensive, and gated by deep architecture knowledge. LLMs can read profiler output and write CUDA, but they need:
+
+- A **structured workflow** so optimization is reproducible, not improvisational
+- **Greppable metrics** so they can reason about bottlenecks without parsing prose
+- **Memory across runs** so wins compound and known failures aren't re-tried
+- **Real-hardware ground truth** so claimed speedups actually matter
+
+CCO provides all four.
+
+---
+
+## Why This Is Specific
+
+CCO is deliberately scoped. It does one thing — drive an AI agent through disciplined, reproducible CUDA / Triton kernel optimization on real hardware — and the rest of the design follows from that.
+
+**Framework, not a model.** The repo provides scaffolding (protocol, harness, profiler, knowledge base). You bring the agent. Claude, Codex, Cursor, or a local model — all work. Swap them at will; nothing in the system is coupled to a particular vendor.
+
+**Protocol-first, not search-first.** The agent doesn't blindly mutate code. It follows a 10-step experiment loop ([program.md](program.md)) — baseline, macro analysis, micro analysis, hypothesis, edit, commit, re-bench, decide, record, repeat. Every iteration is a structured experiment, not a roll of the dice.
+
+**Persistent, growing knowledge base.** Lessons from each run land in [CUDA_OPTIMIZATION.md](CUDA_OPTIMIZATION.md), organized by kernel type *and* by bottleneck pattern (register pressure, occupancy, memory coalescing, tensor-core utilization, etc.). Wins compound. Known failure modes are recorded so they aren't re-tried. This file is the long-term artifact the project is built to grow.
+
+**Full experiment lineage.** Every accepted change writes a row to [workspace/results.tsv](workspace/results.tsv) with the hypothesis, metrics, decision, git SHA, and parent-experiment ID. Anyone can replay the chain of optimizations that led to a given speedup.
+
+**Greppable, machine-readable output.** Tools emit `key=value` lines, not prose. The agent reasons about `bottleneck=memory`, `occupancy=42%`, `l2_hit_rate=87%` directly — no fragile NL parsing in the middle.
+
+**Real-hardware verification, no shortcuts.** Roofline analysis uses actual peak FLOPs and HBM bandwidth for the detected GPU. Nsight Compute supplies stall reasons, occupancy, and cache statistics from the real kernel run. Correctness is verified by a 5-stage pipeline (smoke → shape sweep → numerical stability → determinism → edge cases) against pure-PyTorch references. Numbers reported here reflect what you'd see in production.
+
+**Multi-agent-ready.** Git worktrees isolate per-kernel work; `CUDA_VISIBLE_DEVICES` binds agents to GPUs. [tools/merge_results.py](tools/merge_results.py) consolidates `results.tsv` from parallel worktrees into the main repo.
+
+**Small surface area.** ~10 Python files. Easy to read end-to-end, easy to fork, easy to extend.
+
+**The core bet:** the most valuable artifact in AI-driven kernel optimization isn't the agent — it's the *accumulated knowledge of what works on what hardware for what bottleneck*. This repo is designed to grow that artifact in public.
+
+---
+
+## Hardware
+
+This project is **verified on production NVIDIA datacenter and workstation GPUs**, not toy simulators. We do not lower the bar to make the demo easier — the bar is the bar.
+
+**Tested architectures:** H100, H800, A100, L40S, L4, A10, RTX 4090, RTX 4080, RTX 3090, RTX 3080, B200, B100.
+
+**Why this matters:**
+- Roofline analysis uses real peak FLOPs and memory bandwidth, not estimates
+- Nsight Compute (NCU) profiling captures actual stall reasons, occupancy, and cache behavior
+- Correctness is checked against real PyTorch CUDA reference outputs, not numerical approximations
+- Reported speedups reflect what you would see in production inference / training
+
+If you don't have access to one of the tested GPUs, the framework still runs — but published benchmarks are only meaningful within a hardware class.
+
+---
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# Install dependencies (uv is the supported package manager)
 uv sync
 
-# Prepare the environment
+# Validate environment: CUDA, Triton, NCU, GPU detection
 uv run tools/prepare.py
 
-# Add your kernel to kernels/ (see "Adding Your Own Kernels" below)
-# Then select it for optimization:
-cp kernels/your_kernel.py kernel.py
+# Pick a kernel to optimize
+cp kernels/rms_norm.py kernel.py
 
-# Run a benchmark
+# Baseline benchmark
 uv run tools/bench.py
 
-# Profile the current kernel
-uv run tools/profile.py
-
-# Or kick off the agent loop (via your AI agent):
-# "Read program.md and start optimizing the kernel."
+# Then either drive iterations manually or hand off to an AI agent:
+#   "Read program.md and start optimizing kernel.py."
+#
+# Or run the automated loop:
+uv run tools/run_loop.py --hypothesis "increase tile size from 64 to 128" --ncu
 ```
 
-## How It Works
+---
 
-The agent reads `program.md` which defines the experimental protocol. Each iteration:
+## The Optimization Loop
 
-1. The agent examines profiling data to understand the bottleneck
-2. Consults `CUDA_OPTIMIZATION.md` for optimization strategies
-3. Makes a focused change to `kernel.py`
-4. Commits and runs `tools/bench.py`
-5. If performance improves, keeps the change; otherwise reverts
-6. Records the outcome in `workspace/MEMORY.md` and `workspace/results.tsv`
+Defined in [program.md](program.md). Each iteration:
 
-## Adding Your Own Kernels
+1. **Benchmark** `kernel.py` for throughput, bandwidth, correctness
+2. **Macro analysis** — roofline classifies the kernel as compute-bound or memory-bound
+3. **Micro analysis** — NCU reveals top stall reasons, occupancy, L1/L2 hit rates
+4. **Hypothesize** an optimization based on the bottleneck + [CUDA_OPTIMIZATION.md](CUDA_OPTIMIZATION.md) knowledge base
+5. **Modify** the kernel
+6. **Commit** with the hypothesis as the message
+7. **Re-benchmark**
+8. **Decide** keep (>1% gain, still correct) or revert
+9. **Record** to [workspace/results.tsv](workspace/results.tsv) with parent-experiment lineage
+10. **Repeat**
 
-To add a kernel for the agent to optimize:
+---
 
-1. **Create the kernel module** at `kernels/your_kernel.py` exporting:
-   - `KERNEL_TYPE: str` -- identifier (e.g. `"rms_norm"`)
-   - `kernel_fn(**inputs) -> torch.Tensor` -- the kernel to optimize
-   - `get_inputs() -> dict` -- generates sample inputs
-   - `get_flops() -> int` -- total FLOPs for roofline analysis
-   - `get_bytes() -> int` -- total bytes accessed for roofline analysis
+## Bundled Kernels
 
-2. **Add a reference implementation** under `references/` (pure PyTorch, used for correctness checking)
+Each kernel ships with a baseline, a reference implementation, and a benchmark config:
 
-3. **Add a benchmark config** in `tools/bench.py` under `KERNEL_CONFIGS` with test sizes, tolerances, input generator, and reference function
+| Kernel | Description | Type |
+|---|---|---|
+| `rms_norm` | Per-row RMS normalization | Memory-bound |
+| `qkv_part_rope` | QKV partial rotary positional embedding | Mixed |
+| `swiglu_input_quant` | SwiGLU activation + FP8 blockwise quantization | Multi-output |
+| `persistent_matmul` | GEMM with persistent CTA pattern | Compute-bound |
+| `dsa_forward` | Dynamic sparse attention (GQA-aware) | Mixed |
 
-4. **Copy to `kernel.py`** and start optimizing:
-   ```bash
-   cp kernels/your_kernel.py kernel.py
-   uv run tools/bench.py
-   ```
+---
 
-## Requirements
+## Project Structure
 
-- Python >= 3.10
-- CUDA-capable GPU
-- CUDA Toolkit
-- [uv](https://github.com/astral-sh/uv) package manager
+```
+CCO/
+├── program.md              # Agent workflow protocol
+├── CUDA_OPTIMIZATION.md    # Agent-maintained optimization knowledge base
+├── BENCHMARKS.md           # Public benchmark results
+├── CONTRIBUTING.md         # How to contribute
+├── kernel.py               # The kernel currently being optimized
+├── kernels/                # Read-only baselines
+├── kernels_optimized/      # Agent-produced optimized versions
+├── kernel_configs/         # TOML + Python pairs declaring test cases
+├── references/             # PyTorch reference implementations
+├── memory/                 # Per-kernel experiment history
+├── workspace/              # Runtime outputs (results.tsv, MEMORY.md, ncu_reports/)
+├── docs/                   # Architecture and optimization references
+├── tools/
+│   ├── bench.py            # Benchmark harness + 5-stage correctness pipeline
+│   ├── ncu_profile.py      # Nsight Compute profiling wrapper (greppable output)
+│   ├── run_loop.py         # Automated experiment driver (commit → bench → decide → log)
+│   ├── prepare.py          # Environment validation (CUDA, Triton, NCU, GPU detection)
+│   └── merge_results.py    # Merge results.tsv from multiple agent worktrees
+└── pyproject.toml
+```
+
+---
+
+## Adding Your Own Kernel
+
+1. Drop a baseline into `kernels/your_kernel.py` exporting `KERNEL_TYPE`, `kernel_fn`, `get_inputs`, `get_flops`, `get_bytes`.
+2. Add a PyTorch reference in `references/your_kernel.py`.
+3. Add a `kernel_configs/your_kernel.toml` + matching `.py` with input generators, reference fn, FLOPs/bytes callbacks.
+4. `cp kernels/your_kernel.py kernel.py` and start the loop.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist.
+
+---
+
+## Contributing
+
+We welcome:
+- New kernel baselines
+- Benchmark results on new hardware
+- Improvements to the agent protocol
+- Documentation and reference material
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## Community
+
+Join the CCO Discord: **[discord.gg/kEHZ3wJuHM](https://discord.gg/kEHZ3wJuHM)**
+
+Use it to discuss kernels, share benchmark numbers across hardware, ask for help, and follow release announcements. Channels include `#help`, `#kernels`, `#benchmarks`, `#agent-prompts`, `#papers`, and `#hardware`.
+
+---
 
 ## License
 

@@ -1,5 +1,5 @@
 [project]
-name = "cuda-evolve"
+name = "cuda-compute-oss"
 version = "0.1.0"
 description = "Autonomous GPU kernel optimization system driven by AI agents"
 readme = "README.md"
