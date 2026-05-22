@@ -211,7 +211,16 @@ def main() -> None:
     if args.kernel:
         rows = [row for row in rows if row["kernel"] == args.kernel]
     else:
-        kernels = sorted({row["kernel"] if row["kernel"] else "<unknown>" for row in rows})
+        unknown_ids = [row["exp_id"] for row in rows if not row["kernel"]]
+        kernels = sorted({row["kernel"] for row in rows if row["kernel"]})
+        if unknown_ids and (kernels or len(unknown_ids) > 1):
+            sample = ", ".join(unknown_ids[:3])
+            if len(unknown_ids) > 3:
+                sample += ", ..."
+            raise SystemExit(
+                f"cannot infer kernel from experiment_id for rows: {sample}. "
+                "Use --kernel <name>."
+            )
         if len(kernels) > 1:
             raise SystemExit(
                 f"multiple kernels detected: {', '.join(kernels)}. "
